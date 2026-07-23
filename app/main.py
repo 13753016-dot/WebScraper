@@ -2,6 +2,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+
 from app.database import init_db
 from app.api.scrape import router as scrape_router
 from app.api.jobs import router as jobs_router

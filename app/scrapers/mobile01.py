@@ -17,6 +17,45 @@ logger = logging.getLogger("scraper.mobile01")
 
 
 class Mobile01Scraper(BaseScraper):
+    # 本地備用子版塊快取 (當 Sitemap 被 WAF 阻擋或解析失敗時無縫降級啟用，確保 100% 服務可用性)
+    FALLBACK_FORUMS = {
+        "apple": [
+            {"id": 383, "name": "iPhone"},
+            {"id": 627, "name": "iPhone 軟體"},
+            {"id": 563, "name": "iPad"},
+            {"id": 626, "name": "iPad 軟體"},
+            {"id": 481, "name": "Mac筆記型電腦"},
+            {"id": 480, "name": "Mac桌上型電腦"},
+            {"id": 470, "name": "Apple Watch"},
+            {"id": 482, "name": "蘋果軟體綜合"},
+            {"id": 483, "name": "蘋果周邊綜合"}
+        ],
+        "phone": [
+            {"id": 569, "name": "Samsung"},
+            {"id": 588, "name": "ASUS"},
+            {"id": 565, "name": "Google"},
+            {"id": 566, "name": "Sony"},
+            {"id": 568, "name": "Android智慧型手機綜合"}
+        ],
+        "camera": [
+            {"id": 244, "name": "Canon單眼相機"},
+            {"id": 248, "name": "Nikon單眼相機"},
+            {"id": 254, "name": "Sony單眼相機"},
+            {"id": 257, "name": "單眼數位相機綜合"}
+        ],
+        "laptop": [
+            {"id": 233, "name": "Asus筆記型電腦"},
+            {"id": 232, "name": "Acer筆記型電腦"},
+            {"id": 241, "name": "MSI筆記型電腦"},
+            {"id": 159, "name": "攜帶型電腦綜合"}
+        ],
+        "computer": [
+            {"id": 396, "name": "自組電腦分享"},
+            {"id": 513, "name": "電腦桌上型綜合"},
+            {"id": 300, "name": "電腦安全綜合"}
+        ]
+    }
+
     def __init__(self, **kwargs):
         # 由於論壇防爬機制嚴格，我們限制併發數為 2，並維持至少 1.0 秒請求間隔以示友善
         super().__init__(platform="mobile01", concurrency=2, min_interval=1.0, **kwargs)
@@ -25,7 +64,11 @@ class Mobile01Scraper(BaseScraper):
     async def get_session(self) -> AsyncSession:
         """獲取或懶載入初始化 curl_cffi AsyncSession 實例"""
         if self.session is None:
-            self.session = AsyncSession(timeout=self.timeout_seconds)
+            # 預設禁用系統代理，避免本地代理軟體干擾
+            self.session = AsyncSession(
+                timeout=self.timeout_seconds,
+                proxies={"http": None, "https": None}
+            )
         return self.session
 
     async def close(self):
@@ -40,6 +83,11 @@ class Mobile01Scraper(BaseScraper):
         session = await self.get_session()
         headers = self.get_default_headers()
         headers["Referer"] = "https://www.mobile01.com/"
+        
+        # 合併並彈出 kwargs 中的自定義 headers，避免 session.get 重複傳參
+        custom_headers = kwargs.pop("headers", None)
+        if custom_headers:
+            headers.update(custom_headers)
         
         async with self.sem:
             try:
@@ -75,8 +123,6 @@ class Mobile01Scraper(BaseScraper):
             soup = BeautifulSoup(html, "lxml")
             
             sections = soup.select(".u-gapNextV--lg")
-            if not sections:
-                logger.warning(f"[DEBUG] Sitemap HTML 長度={len(html)}，前 1000 個字元: {html[:1000]}")
             forum_list = []
             
             for sec in sections:
@@ -86,17 +132,25 @@ class Mobile01Scraper(BaseScraper):
                 sec_title = title_a.get_text(strip=True)
                 
                 
-                # 比對大分類標題 (使用 \u 轉義以免疫 any OS encoding bug)
+                # 比對大分類標題 (使用 chr() 函數動態構造，徹底免疫任何作業系統/直譯器編碼載入 Bug)
                 matched = False
-                if category == "phone" and "\u624b\u6a5f" in sec_title:
+                title_phone = chr(25163) + chr(27231)        # 手機
+                title_camera = chr(30456) + chr(27231)       # 相機
+                title_dslr = chr(21934) + chr(30524)         # 單眼
+                title_laptop = chr(31558) + chr(38651)       # 筆電
+                title_computer = chr(38651) + chr(33126)     # 電腦
+                title_notebook = chr(31558) + chr(35352) + chr(22411) # 筆記型
+                title_apple = chr(34315) + chr(26524)        # 蘋果
+                
+                if category == "phone" and title_phone in sec_title:
                     matched = True
-                elif category == "camera" and ("\u76f8\u6a5f" in sec_title or "\u55ae\u773c" in sec_title):
+                elif category == "camera" and (title_camera in sec_title or title_dslr in sec_title):
                     matched = True
-                elif category == "laptop" and "\u7b46\u96fb" in sec_title:
+                elif category == "laptop" and title_laptop in sec_title:
                     matched = True
-                elif category == "computer" and "\u96fb\u8166" in sec_title and "\u7b46\u8a18\u578b" not in sec_title:
+                elif category == "computer" and title_computer in sec_title and title_notebook not in sec_title:
                     matched = True
-                elif category == "apple" and ("\u860b\u679c" in sec_title or "Apple" in sec_title):
+                elif category == "apple" and (title_apple in sec_title or "Apple" in sec_title):
                     matched = True
                     
                 if matched:
@@ -112,16 +166,20 @@ class Mobile01Scraper(BaseScraper):
                                 "name": name
                             })
             
-            logger.info(f"Mobile01 Sitemap 解析完畢，分類='{category}'，共找到 {len(forum_list)} 個子版塊")
+            if not forum_list:
+                fallback_list = self.FALLBACK_FORUMS.get(category, [])
+                logger.warning(f"Mobile01 Sitemap 解析子分類為空，啟用本地靜態 Fallback 快取... 分類='{category}', 快取長度={len(fallback_list)}")
+                return fallback_list
             return forum_list
         except Exception as e:
-            logger.error(f"Mobile01 Sitemap 解析失敗: {str(e)}")
-            return []
+            fallback_list = self.FALLBACK_FORUMS.get(category, [])
+            logger.error(f"Mobile01 Sitemap 解析失敗: {str(e)}，啟用本地靜態 Fallback 快取... 分類='{category}', 快取長度={len(fallback_list)}")
+            return fallback_list
 
     async def _fetch_post_summary(self, forum_id: int, topic_id: str) -> str:
         """點入貼文詳細頁，抓取一樓前 300 個字做為內容摘要"""
-        # 加入 0.5 ~ 1.5 秒隨機真人延遲，防範 Datacenter IP 請求頻率過快被 CF 判定為機器人 403
-        await asyncio.sleep(random.uniform(0.5, 1.5))
+        # 微調隨機真人延遲，防範 Datacenter IP 請求頻率過快被 CF 判定為機器人 403
+        await asyncio.sleep(random.uniform(1.0, 2.2))
         
         url = f"https://www.mobile01.com/topicdetail.php?f={forum_id}&t={topic_id}"
         ref_url = f"https://www.mobile01.com/topiclist.php?f={forum_id}"
@@ -144,29 +202,33 @@ class Mobile01Scraper(BaseScraper):
         self,
         category: str,
         keyword: Optional[str] = None,
-        limit: Optional[int] = 10
+        limit: Optional[int] = None
     ) -> List[NewsSchema]:
-        limit = limit or 10
-        logger.info(f"mobile01 爬取開始: 分類='{category}', 關鍵字='{keyword}', 目標數量={limit}")
+        logger.info(f"mobile01 爬取開始: 分類='{category}', 關鍵字='{keyword}', 目標數量={limit if limit is not None else '無限制'}")
         
         # 1. 取得目標大類的所有子板塊 ID
         forums = await self._get_forum_ids_by_category(category)
+        logger.info(f"Mobile01 分類='{category}' 取得子板塊共 {len(forums)} 個，準備開始遍歷爬取...")
         if not forums:
             logger.warning(f"mobile01 分類 '{category}' 無子分類板塊，結束爬取。")
             return []
             
         posts: List[NewsSchema] = []
+        consecutive_failures = 0
         
-        # 2. 輪詢子板塊取得文章
-        # 為了保證品類下的多樣性，我們從每個子板塊抓取前 5 篇，直到抓滿 limit
-        posts_per_forum = 5
+        # 2. 輪詢子板塊取得文章，每個子板塊固定抓取最新的前 15 則文章
+        posts_per_forum = 15
         
         for forum in forums:
-            if len(posts) >= limit:
+            if limit is not None and len(posts) >= limit:
                 break
                 
+            # 關閉並重置 Session 連線，讓每個子板塊皆使用全新 TLS 握手與 Local Port，粉碎 WAF 行為追蹤
+            await self.close()
+            
             forum_id = forum["id"]
             forum_name = forum["name"]
+            logger.info(f"[DEBUG] 開始爬取板塊 {forum_name} (f={forum_id})")
             
             url = f"https://www.mobile01.com/topiclist.php?f={forum_id}"
             try:
@@ -176,11 +238,11 @@ class Mobile01Scraper(BaseScraper):
                 rows = soup.select(".l-listTable__tr")
                 # 跳過表頭 (第一列)
                 if len(rows) <= 1:
-                    continue
+                    logger.warning(f"[mobile01] 板塊 {forum_name} (f={forum_id}) 貼文列表為空，疑似遭遇 CF WAF 挑戰攔截")
                     
                 added_count = 0
                 for row in rows[1:]:
-                    if len(posts) >= limit or added_count >= posts_per_forum:
+                    if (limit is not None and len(posts) >= limit) or added_count >= posts_per_forum:
                         break
                         
                     # A. 標題與連結
@@ -195,7 +257,6 @@ class Mobile01Scraper(BaseScraper):
                         continue
                         
                     # B. 發文時間 (發文者欄位下的 o-fNotes)
-                    # 每列中有兩個 l-listTable__td--time，第一個是發文時間，第二個是最後回覆時間
                     time_elems = row.select(".l-listTable__td--time .o-fNotes")
                     published_at = None
                     if time_elems:
@@ -221,6 +282,18 @@ class Mobile01Scraper(BaseScraper):
                     if topic_id:
                         content_summary = await self._fetch_post_summary(forum_id, topic_id)
                         
+                    # 統計連續失敗次數，用以自適應觸發冷卻防禦 WAF
+                    if topic_id:
+                        if not content_summary:
+                            consecutive_failures += 1
+                        else:
+                            consecutive_failures = 0
+                            
+                    if consecutive_failures >= 3:
+                        logger.warning("[mobile01] 檢測到連續 3 次詳情頁抓取失敗，疑似觸發 Cloudflare WAF 限速。主動進行 15 秒深度冷卻休眠...")
+                        await asyncio.sleep(15.0)
+                        consecutive_failures = 0  # 重置
+                        
                     post = NewsSchema(
                         source=f"Mobile01 - {forum_name} ({category.capitalize()})",
                         title=title,
@@ -235,7 +308,9 @@ class Mobile01Scraper(BaseScraper):
                     
             except Exception as e:
                 logger.warning(f"爬取 Mobile01 板塊 {forum_name} (f={forum_id}) 異常: {str(e)}")
-                continue
+                
+            # 板塊與板塊之間加入隨機延遲，防止高頻請求觸發 Cloudflare WAF 阻擋
+            await asyncio.sleep(random.uniform(1.5, 3.0))
                 
         logger.info(f"mobile01 爬取結束，共獲取 {len(posts)} 筆貼文")
-        return posts[:limit]
+        return posts[:limit] if limit is not None else posts
