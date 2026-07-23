@@ -75,6 +75,8 @@ class Mobile01Scraper(BaseScraper):
             soup = BeautifulSoup(html, "lxml")
             
             sections = soup.select(".u-gapNextV--lg")
+            if not sections:
+                logger.warning(f"[DEBUG] Sitemap HTML 長度={len(html)}，前 1000 個字元: {html[:1000]}")
             forum_list = []
             
             for sec in sections:
