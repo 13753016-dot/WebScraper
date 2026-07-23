@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Generator
 from sqlmodel import Field, SQLModel, create_engine, Session
 
-DATABASE_URL = "sqlite:///c:/WebScraper/market_info.db"
+DATABASE_URL = "sqlite:///market_info.db"
 
 # 建立 SQLite Engine
 # connect_args={"check_same_thread": False} 適用於 SQLite 的多執行緒異步呼叫
