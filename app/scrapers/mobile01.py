@@ -1,5 +1,7 @@
 import logging
 import re
+import asyncio
+import random
 from datetime import datetime
 from typing import List, Optional, Any, Dict
 from bs4 import BeautifulSoup
@@ -73,8 +75,6 @@ class Mobile01Scraper(BaseScraper):
             soup = BeautifulSoup(html, "lxml")
             
             sections = soup.select(".u-gapNextV--lg")
-            if not sections:
-                logger.warning(f"[DEBUG] Sitemap HTML 長度={len(html)}，前 1000 個字元: {html[:1000]}")
             forum_list = []
             
             for sec in sections:
@@ -82,7 +82,7 @@ class Mobile01Scraper(BaseScraper):
                 if not title_a:
                     continue
                 sec_title = title_a.get_text(strip=True)
-                logger.warning(f"[DEBUG] Sec Title in Render: {repr(sec_title)}")
+                
                 
                 # 比對大分類標題 (使用 \u 轉義以免疫 any OS encoding bug)
                 matched = False
@@ -118,10 +118,14 @@ class Mobile01Scraper(BaseScraper):
 
     async def _fetch_post_summary(self, forum_id: int, topic_id: str) -> str:
         """點入貼文詳細頁，抓取一樓前 300 個字做為內容摘要"""
+        # 加入 0.5 ~ 1.5 秒隨機真人延遲，防範 Datacenter IP 請求頻率過快被 CF 判定為機器人 403
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        
         url = f"https://www.mobile01.com/topicdetail.php?f={forum_id}&t={topic_id}"
+        ref_url = f"https://www.mobile01.com/topiclist.php?f={forum_id}"
         try:
-            # 詳情頁有時較重，給予最多 10 秒超時
-            html = await self.request_cf(url, timeout=10.0)
+            # 傳入母版塊 Referer 建立健全的 Referral 瀏覽路徑鏈條
+            html = await self.request_cf(url, headers={"Referer": ref_url}, timeout=10.0)
             soup = BeautifulSoup(html, "lxml")
             
             content_elem = soup.select_one(".c-articleCard__content") or soup.select_one("article") or soup.select_one("[itemprop='articleBody']")
