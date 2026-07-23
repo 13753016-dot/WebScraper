@@ -98,9 +98,33 @@ def test_sync_momo():
         print(f"測試異常: {str(e)}")
 
 
+def test_sync_mobile01():
+    print("\n--- 4. 測試同步爬取 Mobile01 蘋果板塊 ---")
+    payload = {
+        "platform": "mobile01",
+        "category": "apple",
+        "limit": 5
+    }
+    try:
+        # 二級爬取一樓內文耗時較長，超時放寬至 30.0 秒
+        response = httpx.post(f"{BASE_URL}/scrape/sync", json=payload, timeout=30.0)
+        print(f"Status Code: {response.status_code}")
+        if response.status_code == 200:
+            data = response.json()
+            print(f"成功取得貼文筆數: {len(data)}")
+            if data:
+                print("第一筆貼文 JSON 範例:")
+                print(json.dumps(data[0], indent=2, ensure_ascii=False))
+        else:
+            print(f"錯誤回應: {response.text}")
+    except Exception as e:
+        print(f"測試異常: {str(e)}")
+
+
 if __name__ == "__main__":
     # 給 FastAPI 1-2 秒啟動時間
     time.sleep(2)
     test_sync_pchome()
     test_async_coolpc_news()
     test_sync_momo()
+    test_sync_mobile01()
