@@ -82,6 +82,7 @@ class Mobile01Scraper(BaseScraper):
                 if not title_a:
                     continue
                 sec_title = title_a.get_text(strip=True)
+                logger.warning(f"[DEBUG] Sec Title in Render: {repr(sec_title)}")
                 
                 # 比對大分類標題 (使用 \u 轉義以免疫 any OS encoding bug)
                 matched = False
