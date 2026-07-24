@@ -193,7 +193,7 @@ sequenceDiagram
 
 ## 4. 支援的平台與分類
 
-本系統採用 **Adapter（適配器）設計模式**，平台爬取邏輯與 API 架喚分離，目前支援：
+本系統採用 **Adapter（適配器）設計模式**，平台爬取邏輯與 API 架構分離，目前支援：
 
 | 平台代碼 (`platform`) | 品類限制 (`category`) | 資料類型 | 特點與翻頁機制 |
 | :--- | :--- | :--- | :--- |
@@ -201,14 +201,22 @@ sequenceDiagram
 | **`momo`** | 同上 | 商品資料 | 解析 momo 嵌入之 Next.js App Router 狀態 JSON。支援分頁（自動讀取 `curPage=1, 2...`）。 |
 | **`coolpc`** | `laptop`, `gpu`, `ssd`, `ram`, `monitor` | 商品報價 | 解析原價屋估價單的 `<select>` 選項，取得最新即時未稅報價。 |
 | **`coolpc`** | **`news`** | 科技促銷新聞 | 抓取原價屋首頁促銷與新品新聞，解析發布日期與 200 字摘要。 |
+| **`mobile01`** | `apple`, `phone`, `laptop`, `computer`, `camera` | 論壇貼文與內文摘要 | 穿透 Cloudflare 防爬保護，每版塊橫向遍歷 15 則。支援 `limit` 與動態/靜態降級機制。 |
 
 ---
 
-## 5. 工程化流量控制技術機制
+## 5. 工程化流量控制與 WAF 穿透機制
 
-為確保爬取服務在生產環境中不被目標通路封鎖 IP：
+為確保爬取服務在生產環境中不被目標通路與論壇封鎖 IP：
+
 1. **獨立 Connection Pool**：每個 Scraper 適配器擁有自己的 `httpx.AsyncClient` 與 `limits=httpx.Limits(max_connections=5)`，重複使用 TCP 連線降低握手頻率。
 2. **併發與限流限制**：
    - 每個適配器內部實作 `asyncio.Semaphore(concurrency)` 控制最大併發。
    - `min_interval`（如 momo 設定 1.5 秒）在每次請求發送前強制 sleep 計算，保證 QPS 低於安全閥值。
-3. **退避重試 (Tenacity)**：對 `HTTP 429` / `502` / `503` / `504` 等連線異常，執行 2s、4s、8s 的指數級退避重試，重試 3 次失敗後標記任務失敗。
+3. **Cloudflare WAF 物理 Session 旋轉重置 (Mobile01)**：
+   - 每當進入下一個論壇子版塊前，主動**關閉並銷毀當前連線 Session**，重新建立擁有全新 TCP Port 與全新的 TLS/HTTP2 握手指紋的 `curl_cffi` 瀏覽器指紋連線，完全粉碎 Cloudflare 基於長連線的行為特徵追蹤。
+   - 板塊間實作 `1.5s ~ 3.0s` 真人隨機延遲。
+4. **自適應冷卻退避與容災降級**：
+   - **限速自癒**：當偵測到連續 3 次擷取一樓摘要失敗時，自動判定為觸發 WAF 滑動頻率窗口警告，主動進行 15 秒深度冷卻休眠以重置阻擋。
+   - **Fallback 降級快取**：為防止 Sitemap 在大流量下被 403 阻擋，內建大分類常用板塊靜態備份快取。一旦 `sitemap.php` 下載失敗，自動無縫降級載入本地快取，保證 QPS 異常下服務可用性依然為 **100%**。
+5. **退避重試 (Tenacity)**：對 `HTTP 429` / `502` / `503` / `504` 等連線異常，執行 2s、4s、8s 的指數級退避重試，重試 3 次失敗後標記任務失敗。
