@@ -33,6 +33,12 @@ class JobService:
             keyword=request.keyword
         )
         
+        # 建立任務時，自動在背景順便清理 5 天 (120 小時) 前的過期任務與結果紀錄
+        try:
+            self.run_cleanup(hours_to_keep=120)
+        except Exception as e:
+            logger.warning(f"自動清理過期暫存資料失敗: {str(e)}")
+            
         return JobStatusResponse(
             job_id=job.job_id,
             platform=job.platform,
@@ -132,6 +138,6 @@ class JobService:
         finally:
             await scraper.close()
             
-    def run_cleanup(self, days_to_keep: int = 7):
+    def run_cleanup(self, hours_to_keep: int = 120):
         """主動清理過期暫存資料"""
-        self.result_repo.clear_expired_results(days_to_keep)
+        self.result_repo.clear_expired_results(hours_to_keep)

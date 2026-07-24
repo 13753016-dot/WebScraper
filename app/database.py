@@ -3,7 +3,10 @@ from datetime import datetime
 from typing import Optional, Generator
 from sqlmodel import Field, SQLModel, create_engine, Session
 
-DATABASE_URL = "sqlite:///market_info.db"
+# 取得專案根目錄絕對路徑，固定 SQLite 資料庫檔案位置
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATABASE_PATH = os.path.join(BASE_DIR, "market_info.db")
+DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
 
 # 建立 SQLite Engine
 # connect_args={"check_same_thread": False} 適用於 SQLite 的多執行緒異步呼叫

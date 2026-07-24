@@ -2,7 +2,7 @@ import json
 from typing import List, Any
 from datetime import datetime, timedelta
 from sqlmodel import Session, select, delete
-from app.database import ScrapedResult
+from app.database import ScrapedResult, Job
 
 
 class ResultRepository:
@@ -36,9 +36,16 @@ class ResultRepository:
         results = self.db.exec(statement).all()
         return [json.loads(r.data_json) for r in results]
 
-    def clear_expired_results(self, days_to_keep: int = 7):
-        """自動清理 7 天前的暫存資料，減輕本地 SQLite 負擔"""
-        expiration_date = datetime.utcnow() - timedelta(days=days_to_keep)
-        statement = delete(ScrapedResult).where(ScrapedResult.created_at < expiration_date)
-        self.db.exec(statement)
+    def clear_expired_results(self, hours_to_keep: int = 12):
+        """自動清理 12 小時前的暫存結果與任務紀錄，維持資料庫極輕量"""
+        expiration_date = datetime.utcnow() - timedelta(hours=hours_to_keep)
+        
+        # 1. 刪除過期的 scraped_results
+        stmt_results = delete(ScrapedResult).where(ScrapedResult.created_at < expiration_date)
+        self.db.exec(stmt_results)
+        
+        # 2. 刪除過期的 jobs
+        stmt_jobs = delete(Job).where(Job.created_at < expiration_date)
+        self.db.exec(stmt_jobs)
+        
         self.db.commit()
