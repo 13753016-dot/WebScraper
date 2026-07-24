@@ -89,24 +89,34 @@ class Mobile01Scraper(BaseScraper):
             except Exception as e:
                 raise ScrapeFailed(f"連線異常: {str(e)}", platform=self.platform)
 
-    async def _fetch_post_summary(self, forum_id: int, topic_id: str) -> str:
-        """點入貼文詳細頁，抓取一樓前 300 個字做為內容摘要"""
+    async def _fetch_post_summary(self, forum_id: int, topic_id: str) -> Dict[str, str]:
+        """點入貼文詳細頁，抓取一樓前 300 個字做為內容摘要，並順便解析文章所屬版塊來源"""
         await asyncio.sleep(random.uniform(1.0, 2.2))
         
+        result = {"summary": "", "source_board": ""}
         url = f"https://www.mobile01.com/topicdetail.php?f={forum_id}&t={topic_id}"
         ref_url = f"https://www.mobile01.com/topiclist.php?f={forum_id}" if forum_id else "https://www.mobile01.com/"
         try:
             html = await self.request_cf(url, headers={"Referer": ref_url}, timeout=10.0)
             soup = BeautifulSoup(html, "lxml")
             
+            # 1. 抓取內文摘要
             content_elem = soup.select_one(".c-articleCard__content") or soup.select_one("article") or soup.select_one("[itemprop='articleBody']")
             if content_elem:
                 text = content_elem.get_text(strip=True)
                 text = re.sub(r"\s+", " ", text)
-                return text[:300]
+                result["summary"] = text[:300]
+                
+            # 2. 解析麵包屑來源 (例: 首頁 -> 蘋果 -> iPhone)
+            bc_items = soup.select(".c-breadCrumb .c-breadCrumb__item")
+            if len(bc_items) >= 3:
+                cat_name = bc_items[1].get_text(strip=True)
+                forum_name = bc_items[2].get_text(strip=True)
+                result["source_board"] = f"Mobile01 - {forum_name} ({cat_name})"
+                
         except Exception as e:
-            logger.warning(f"擷取貼文內文摘要失敗 (t={topic_id}): {str(e)}")
-        return ""
+            logger.warning(f"擷取貼文內文與麵包屑失敗 (t={topic_id}): {str(e)}")
+        return result
 
     async def scrape(
         self,
@@ -198,8 +208,11 @@ class Mobile01Scraper(BaseScraper):
                     
                     # D. 點入第一樓抓取前 300 字摘要 (50 則內文都抓詳情頁)
                     content_summary = ""
+                    source_board = ""
                     if topic_id and not circuit_broken:
-                        content_summary = await self._fetch_post_summary(int(f_id), topic_id)
+                        detail_info = await self._fetch_post_summary(int(f_id), topic_id)
+                        content_summary = detail_info["summary"]
+                        source_board = detail_info["source_board"]
                         
                     if topic_id and not circuit_broken:
                         if not content_summary:
@@ -213,7 +226,7 @@ class Mobile01Scraper(BaseScraper):
                         consecutive_failures = 0
                         
                     post = NewsSchema(
-                        source=f"Mobile01 - {category.capitalize()} 綜合區",
+                        source=source_board or f"Mobile01 - {category.capitalize()} 綜合區",
                         title=title,
                         url=full_url,
                         published_at=published_at,
